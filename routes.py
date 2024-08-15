@@ -4,7 +4,7 @@ from models import db, User, bcrypt
 from authlib.integrations.flask_client import OAuth
 
 def create_auth_blueprint(oauth):
-    auth = Blueprint('auth', __name__)  # Corrected from _name to __name_
+    auth = Blueprint('auth', __name__)  
 
     google = oauth.register(
         name='google',
@@ -20,7 +20,7 @@ def create_auth_blueprint(oauth):
 
     @auth.route('/signup', methods=['POST'])
     def signup():
-        print("Signup route accessed")  # Debugging line
+        print("Signup route accessed") 
         data = request.get_json()
         existing_user = User.query.filter_by(email=data['email']).first()
 
@@ -60,7 +60,7 @@ def create_auth_blueprint(oauth):
 
     @auth.route('/login/google/authorized')
     def authorized():
-        print("Google authorized route accessed")  # Debugging line
+        print("Google authorized route accessed")  
         token = google.authorize_access_token()
         if token is None:
             return 'Access denied: error={} description={}'.format(
