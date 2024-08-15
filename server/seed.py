@@ -1,21 +1,38 @@
-from app import create_app
-from models import db, Contact
+from flask import Blueprint, request, jsonify
+from .models import db, Contact, Feedback
 
-app = create_app()
+bp = Blueprint('main', __name__)
 
-with app.app_context():
-    # Create all tables
-    db.create_all()
+@bp.route('/contact-us', methods=['POST'])
+def contact_us():
+    data = request.get_json()
+    
+    name = data.get('name')
+    email = data.get('email')
+    phone = data.get('phone')
+    message = data.get('message')
 
-    # Seed data
-    if not Contact.query.first():  # Check if table is empty
-        contact1 = Contact(name='John Doe', email='john@example.com', phone='555-555-5555', message='Hello, this is a test message.')
-        contact2 = Contact(name='Jane Smith', email='jane@example.com', phone='555-555-5556', message='Another test message.')
-        
-        db.session.add(contact1)
-        db.session.add(contact2)
-        db.session.commit()
-        print("Database seeded!")
-    else:
-        print("Database already seeded.")
+    if not all([name, email, message]):
+        return jsonify({'message': 'Missing required fields'}), 400
+
+    new_contact = Contact(name=name, email=email, phone=phone, message=message)
+    db.session.add(new_contact)
+    db.session.commit()
+
+    return jsonify({'message': 'Message sent successfully!'}), 201
+
+@bp.route('/feedback', methods=['POST'])
+def submit_feedback():
+    data = request.get_json()
+    feedback_text = data.get('feedback')
+
+    if not feedback_text:
+        return jsonify({'message': 'Feedback cannot be empty'}), 400
+
+    new_feedback = Feedback(feedback=feedback_text)
+    db.session.add(new_feedback)
+    db.session.commit()
+
+    return jsonify({'message': 'Feedback submitted successfully!'}), 201
+
 

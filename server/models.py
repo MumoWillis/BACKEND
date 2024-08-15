@@ -9,4 +9,7 @@ class Contact(db.Model):
     phone = db.Column(db.String(20), nullable=True)
     message = db.Column(db.Text, nullable=False)
 
-# Include other existing models here if you have them
+class Feedback(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    feedback = db.Column(db.Text, nullable=False)
+
