@@ -144,18 +144,17 @@ def mpesa_callback():
         checkout_request_id = callback_data['CheckoutRequestID']
 
         if result_code == 0:
-            # Payment was successful, update your order status
+            
             print("Payment successful:", result_desc)
-            # You can update the order status in your database here using the CheckoutRequestID
-            # Example: update_order_status(checkout_request_id, 'Confirmed')
+            
         else:
-            # Payment failed, handle accordingly
+          
             print("Payment failed:", result_desc)
-            # Handle the failure case, possibly update order status to failed
+            
 
         return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"})
     else:
-        # If callback data is not as expected, log an error
+        
         print("Unexpected callback data:", data)
         return jsonify({"ResultCode": 1, "ResultDesc": "Rejected"})
 
