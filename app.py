@@ -14,11 +14,13 @@ import os
 app = Flask(__name__)
 app.config.from_object(Config)
 
+# Initialize extensions
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 oauth = OAuth(app)
 stripe.api_key = app.config['STRIPE_SECRET_KEY']
 
+# CORS configuration
 CORS(app, resources={r"/api/*": {
     "origins": ["http://127.0.0.1:5173", "http://localhost:5173"],
     "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -48,18 +50,19 @@ def _corsify_actual_response(response):
 def after_request(response):
     return _corsify_actual_response(response)
 
-# Route for the root URL
+# Root route
 @app.route('/')
 def index():
     return jsonify({'message': 'Welcome to the API!'})
 
-# Auth routes and logic
-auth = Blueprint('auth', __name__)  
+# Auth Blueprint
+auth = Blueprint('auth', __name__)
 
+# OAuth configuration for Google
 google = oauth.register(
     name='google',
-    client_id='your_google_client_id',
-    client_secret='your_google_client_secret',
+    client_id=app.config['GOOGLE_CLIENT_ID'],
+    client_secret=app.config['GOOGLE_CLIENT_SECRET'],
     access_token_url='https://accounts.google.com/o/oauth2/token',
     access_token_params=None,
     authorize_url='https://accounts.google.com/o/oauth2/auth',
@@ -68,6 +71,7 @@ google = oauth.register(
     client_kwargs={'scope': 'email'},
 )
 
+# Password hashing utilities
 def generate_password_hash(password):
     salt = os.urandom(16)
     return salt + hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 100000)
@@ -78,6 +82,7 @@ def check_password_hash(stored_password, provided_password):
     provided_key = hashlib.pbkdf2_hmac('sha256', provided_password.encode(), salt, 100000)
     return provided_key == stored_key
 
+# User signup
 @auth.route('/signup', methods=['POST'])
 def signup():
     data = request.get_json()
@@ -93,6 +98,7 @@ def signup():
     
     return jsonify({'message': 'Account created successfully!'}), 201
 
+# User login
 @auth.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -103,11 +109,13 @@ def login():
     else:
         return jsonify({'message': 'Invalid credentials!'}), 401
 
+# User logout
 @auth.route('/logout', methods=['POST'])
 def logout():
     session.pop('user_id', None)  # Removing the user's ID from session
     return jsonify({'message': 'Logged out successfully!'})
 
+# Google OAuth login
 @auth.route('/login/google')
 def login_google():
     redirect_uri = url_for('auth.authorized', _external=True)
@@ -139,7 +147,7 @@ def authorized():
 # Register the auth blueprint
 app.register_blueprint(auth, url_prefix='/api')
 
-# Models
+# User model
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(150), nullable=False, unique=True)
@@ -154,6 +162,7 @@ class User(db.Model):
     def check_password(self, password):
         return check_password_hash(self.password, password)
 
+# Order model
 class Order(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), nullable=False)
@@ -161,7 +170,7 @@ class Order(db.Model):
     currency = db.Column(db.String(3), nullable=False)
     payment_status = db.Column(db.String(50), nullable=False)
 
-# Routes for Payment Integration
+# Stripe Payment Routes
 @app.route('/stripe-key', methods=['GET'])
 def get_stripe_key():
     return jsonify({'publicKey': app.config['STRIPE_PUBLIC_KEY']})
