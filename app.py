@@ -1,22 +1,18 @@
-from flask import Flask, jsonify, request, redirect, url_for, session, Blueprint
+from flask import Flask, jsonify, request, session, Blueprint
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
+from flask_bcrypt import Bcrypt
 from flask_cors import CORS
 from config import Config
-import stripe
-import requests
-import base64
-from datetime import datetime
-import hashlib
-import os
 
+# Initialize the Flask application
 app = Flask(__name__)
 app.config.from_object(Config)
 
 # Initialize extensions
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
-stripe.api_key = app.config['STRIPE_SECRET_KEY']
+bcrypt = Bcrypt(app)
 
 # CORS configuration
 CORS(app, resources={r"/api/*": {
@@ -56,16 +52,20 @@ def index():
 # Auth Blueprint
 auth = Blueprint('auth', __name__)
 
-# Password hashing utilities
-def generate_password_hash(password):
-    salt = os.urandom(16)
-    return salt + hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 100000)
+# User model
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(150), nullable=False, unique=True)
+    email = db.Column(db.String(150), nullable=False, unique=True)
+    password = db.Column(db.String(150), nullable=False)
 
-def check_password_hash(stored_password, provided_password):
-    salt = stored_password[:16]
-    stored_key = stored_password[16:]
-    provided_key = hashlib.pbkdf2_hmac('sha256', provided_password.encode(), salt, 100000)
-    return provided_key == stored_key
+    def __init__(self, username, email, password):
+        self.username = username
+        self.email = email
+        self.password = bcrypt.generate_password_hash(password).decode('utf-8')
+
+    def check_password(self, password):
+        return bcrypt.check_password_hash(self.password, password)
 
 # User signup
 @auth.route('/signup', methods=['POST'])
@@ -76,8 +76,7 @@ def signup():
     if existing_user:
         return jsonify({'message': 'User already exists!'}), 409
 
-    hashed_password = generate_password_hash(data['password'])
-    new_user = User(username=data['username'], email=data['email'], password=hashed_password)
+    new_user = User(username=data['username'], email=data['email'], password=data['password'])
     db.session.add(new_user)
     db.session.commit()
     
@@ -88,7 +87,7 @@ def signup():
 def login():
     data = request.get_json()
     user = User.query.filter_by(email=data['email']).first()
-    if user and check_password_hash(user.password, data['password']):
+    if user and user.check_password(data['password']):
         session['user_id'] = user.id  # Storing the user's ID in session
         return jsonify({'message': 'Login successful!'})
     else:
@@ -102,110 +101,6 @@ def logout():
 
 # Register the auth blueprint
 app.register_blueprint(auth, url_prefix='/api')
-
-# User model
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(150), nullable=False, unique=True)
-    email = db.Column(db.String(150), nullable=False, unique=True)
-    password = db.Column(db.LargeBinary, nullable=False)
-
-    def __init__(self, username, email, password):
-        self.username = username
-        self.email = email
-        self.password = generate_password_hash(password)
-
-    def check_password(self, password):
-        return check_password_hash(self.password, password)
-
-# Order model
-class Order(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(120), nullable=False)
-    amount = db.Column(db.Integer, nullable=False)
-    currency = db.Column(db.String(3), nullable=False)
-    payment_status = db.Column(db.String(50), nullable=False)
-
-# Stripe Payment Routes
-@app.route('/stripe-key', methods=['GET'])
-def get_stripe_key():
-    return jsonify({'publicKey': app.config['STRIPE_PUBLIC_KEY']})
-
-@app.route('/create-payment-intent', methods=['POST'])
-def create_payment_intent():
-    data = request.json
-    try:
-        intent = stripe.PaymentIntent.create(
-            amount=int(data['amount']),
-            currency=data['currency'],
-            receipt_email=data['email'],
-            metadata={'integration_check': 'accept_a_payment'},
-        )
-        order = Order(
-            email=data['email'],
-            amount=int(data['amount']),
-            currency=data['currency'],
-            payment_status='Pending'
-        )
-        db.session.add(order)
-        db.session.commit()
-        return jsonify({'clientSecret': intent['client_secret']})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
-
-@app.route('/confirm-payment/<int:order_id>', methods=['POST'])
-def confirm_payment(order_id):
-    order = Order.query.get_or_404(order_id)
-    order.payment_status = 'Confirmed'
-    db.session.commit()
-    return jsonify({'message': 'Payment confirmed'})
-
-@app.route('/order-status/<int:order_id>', methods=['GET'])
-def order_status(order_id):
-    order = Order.query.get_or_404(order_id)
-    return jsonify({
-        'order_id': order.id,
-        'email': order.email,
-        'amount': order.amount,
-        'currency': order.currency,
-        'payment_status': order.payment_status
-    })
-
-# MPESA Integration
-def generate_mpesa_password(shortcode, passkey, timestamp):
-    data = shortcode + passkey + timestamp
-    encoded = base64.b64encode(data.encode())
-    return encoded.decode('utf-8')
-
-def get_mpesa_access_token(consumer_key, consumer_secret):
-    api_url = 'https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials'
-    response = requests.get(api_url, auth=(consumer_key, consumer_secret))
-    json_response = response.json()
-    return json_response['access_token']
-
-@app.route('/mpesa-payment', methods=['POST'])
-def mpesa_payment():
-    data = request.json
-    access_token = get_mpesa_access_token(app.config['MPESA_CONSUMER_KEY'], app.config['MPESA_CONSUMER_SECRET'])
-    api_url = 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest'
-    headers = {'Authorization': f'Bearer {access_token}'}
-    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-    password = generate_mpesa_password(app.config['MPESA_SHORTCODE'], app.config['MPESA_PASSKEY'], timestamp)
-    request_data = {
-        'BusinessShortCode': app.config['MPESA_SHORTCODE'],
-        'Password': password,
-        'Timestamp': timestamp,
-        'TransactionType': 'CustomerPayBillOnline',
-        'Amount': data['amount'],
-        'PartyA': data['phone_number'],
-        'PartyB': app.config['MPESA_SHORTCODE'],
-        'PhoneNumber': data['phone_number'],
-        'CallBackURL': app.config['MPESA_CALLBACK_URL'],
-        'AccountReference': 'Order',
-        'TransactionDesc': 'Payment for order'
-    }
-    response = requests.post(api_url, json=request_data, headers=headers)
-    return jsonify(response.json())
 
 if __name__ == '__main__':
     app.run(debug=True)
