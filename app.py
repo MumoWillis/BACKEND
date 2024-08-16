@@ -2,7 +2,6 @@ from flask import Flask, jsonify, request, redirect, url_for, session, Blueprint
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_cors import CORS
-from authlib.integrations.flask_client import OAuth
 from config import Config
 import stripe
 import requests
@@ -17,7 +16,6 @@ app.config.from_object(Config)
 # Initialize extensions
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
-oauth = OAuth(app)
 stripe.api_key = app.config['STRIPE_SECRET_KEY']
 
 # CORS configuration
@@ -57,19 +55,6 @@ def index():
 
 # Auth Blueprint
 auth = Blueprint('auth', __name__)
-
-# OAuth configuration for Google
-google = oauth.register(
-    name='google',
-    client_id=app.config['GOOGLE_CLIENT_ID'],
-    client_secret=app.config['GOOGLE_CLIENT_SECRET'],
-    access_token_url='https://accounts.google.com/o/oauth2/token',
-    access_token_params=None,
-    authorize_url='https://accounts.google.com/o/oauth2/auth',
-    authorize_params=None,
-    api_base_url='https://www.googleapis.com/oauth2/v1/',
-    client_kwargs={'scope': 'email'},
-)
 
 # Password hashing utilities
 def generate_password_hash(password):
@@ -114,35 +99,6 @@ def login():
 def logout():
     session.pop('user_id', None)  # Removing the user's ID from session
     return jsonify({'message': 'Logged out successfully!'})
-
-# Google OAuth login
-@auth.route('/login/google')
-def login_google():
-    redirect_uri = url_for('auth.authorized', _external=True)
-    return google.authorize_redirect(redirect_uri)
-
-@auth.route('/login/google/authorized')
-def authorized():
-    token = google.authorize_access_token()
-    if token is None:
-        return 'Access denied: error={} description={}'.format(
-            request.args.get('error'),
-            request.args.get('error_description')
-        )
-    
-    user_info = google.get('userinfo').json()
-    email = user_info['email']
-    user = User.query.filter_by(email=email).first()
-    
-    if not user:
-        user = User(username=email.split('@')[0], email=email)
-        db.session.add(user)
-        db.session.commit()
-
-    session['user_id'] = user.id  # Storing the user's ID in session
-    session['google_token'] = token
-
-    return redirect(url_for('index'))
 
 # Register the auth blueprint
 app.register_blueprint(auth, url_prefix='/api')
