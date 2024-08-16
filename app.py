@@ -8,14 +8,14 @@ import stripe
 import requests
 import base64
 from datetime import datetime
-from flask_bcrypt import Bcrypt
+import hashlib
+import os
 
 app = Flask(__name__)
 app.config.from_object(Config)
 
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
-bcrypt = Bcrypt(app)
 oauth = OAuth(app)
 stripe.api_key = app.config['STRIPE_SECRET_KEY']
 
@@ -68,6 +68,16 @@ google = oauth.register(
     client_kwargs={'scope': 'email'},
 )
 
+def generate_password_hash(password):
+    salt = os.urandom(16)
+    return salt + hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 100000)
+
+def check_password_hash(stored_password, provided_password):
+    salt = stored_password[:16]
+    stored_key = stored_password[16:]
+    provided_key = hashlib.pbkdf2_hmac('sha256', provided_password.encode(), salt, 100000)
+    return provided_key == stored_key
+
 @auth.route('/signup', methods=['POST'])
 def signup():
     data = request.get_json()
@@ -76,7 +86,7 @@ def signup():
     if existing_user:
         return jsonify({'message': 'User already exists!'}), 409
 
-    hashed_password = bcrypt.generate_password_hash(data['password']).decode('utf-8')
+    hashed_password = generate_password_hash(data['password'])
     new_user = User(username=data['username'], email=data['email'], password=hashed_password)
     db.session.add(new_user)
     db.session.commit()
@@ -87,7 +97,7 @@ def signup():
 def login():
     data = request.get_json()
     user = User.query.filter_by(email=data['email']).first()
-    if user and bcrypt.check_password_hash(user.password, data['password']):
+    if user and check_password_hash(user.password, data['password']):
         session['user_id'] = user.id  # Storing the user's ID in session
         return jsonify({'message': 'Login successful!'})
     else:
@@ -134,15 +144,15 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(150), nullable=False, unique=True)
     email = db.Column(db.String(150), nullable=False, unique=True)
-    password = db.Column(db.String(150), nullable=False)
+    password = db.Column(db.LargeBinary, nullable=False)
 
     def __init__(self, username, email, password):
         self.username = username
         self.email = email
-        self.password = bcrypt.generate_password_hash(password).decode('utf-8')
+        self.password = generate_password_hash(password)
 
     def check_password(self, password):
-        return bcrypt.check_password_hash(self.password, password)
+        return check_password_hash(self.password, password)
 
 class Order(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -230,30 +240,7 @@ def mpesa_payment():
         'TransactionDesc': 'Payment for order'
     }
     response = requests.post(api_url, json=request_data, headers=headers)
-    response_data = response.json()
-    if response_data.get('ResponseCode') == '0':
-        return jsonify({'message': 'Payment request successful', 'CheckoutRequestID': response_data['CheckoutRequestID']})
-    else:
-        return jsonify({'error': response_data.get('errorMessage', 'Payment request failed')}), 400
+    return jsonify(response.json())
 
-@app.route('/mpesa/callback', methods=['POST'])
-def mpesa_callback():
-    data = request.json
-    print("Callback Data: ", data)
-    if 'Body' in data and 'stkCallback' in data['Body']:
-        callback_data = data['Body']['stkCallback']
-        result_code = callback_data['ResultCode']
-        result_desc = callback_data['ResultDesc']
-        checkout_request_id = callback_data['CheckoutRequestID']
-        if result_code == 0:
-            print("Payment successful:", result_desc)
-        else:
-            print("Payment failed:", result_desc)
-        return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"})
-    else:
-        print("Unexpected callback data:", data)
-        return jsonify({"ResultCode": 1, "ResultDesc": "Rejected"})
-
-# Correct conditional check for main
 if __name__ == '__main__':
     app.run(debug=True)
