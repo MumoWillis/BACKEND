@@ -74,7 +74,7 @@ def signup():
     existing_user = User.query.filter_by(email=data['email']).first()
 
     if existing_user:
-        return jsonify({'message': 'User already exists!'}), 409
+        return jsonify({'message': 'User already Exists!'}), 409
 
     new_user = User(username=data['username'], email=data['email'], password=data['password'])
     db.session.add(new_user)
