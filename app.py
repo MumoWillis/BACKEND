@@ -2,23 +2,21 @@ from flask import Flask, jsonify, request, redirect, url_for, session, Blueprint
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_cors import CORS
-from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from authlib.integrations.flask_client import OAuth
 from config import Config
 import stripe
 import requests
 import base64
 from datetime import datetime
+from flask_bcrypt import Bcrypt
 
 app = Flask(__name__)
 app.config.from_object(Config)
 
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
+bcrypt = Bcrypt(app)
 oauth = OAuth(app)
-login_manager = LoginManager()
-login_manager.init_app(app)
-login_manager.login_view = 'auth.login'
 stripe.api_key = app.config['STRIPE_SECRET_KEY']
 
 CORS(app, resources={r"/api/*": {
@@ -90,15 +88,14 @@ def login():
     data = request.get_json()
     user = User.query.filter_by(email=data['email']).first()
     if user and bcrypt.check_password_hash(user.password, data['password']):
-        login_user(user)
+        session['user_id'] = user.id  # Storing the user's ID in session
         return jsonify({'message': 'Login successful!'})
     else:
         return jsonify({'message': 'Invalid credentials!'}), 401
 
 @auth.route('/logout', methods=['POST'])
-@login_required
 def logout():
-    logout_user()
+    session.pop('user_id', None)  # Removing the user's ID from session
     return jsonify({'message': 'Logged out successfully!'})
 
 @auth.route('/login/google')
@@ -124,7 +121,7 @@ def authorized():
         db.session.add(user)
         db.session.commit()
 
-    login_user(user)
+    session['user_id'] = user.id  # Storing the user's ID in session
     session['google_token'] = token
 
     return redirect(url_for('index'))
@@ -133,7 +130,19 @@ def authorized():
 app.register_blueprint(auth, url_prefix='/api')
 
 # Models
-from models import User
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(150), nullable=False, unique=True)
+    email = db.Column(db.String(150), nullable=False, unique=True)
+    password = db.Column(db.String(150), nullable=False)
+
+    def __init__(self, username, email, password):
+        self.username = username
+        self.email = email
+        self.password = bcrypt.generate_password_hash(password).decode('utf-8')
+
+    def check_password(self, password):
+        return bcrypt.check_password_hash(self.password, password)
 
 class Order(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -141,11 +150,6 @@ class Order(db.Model):
     amount = db.Column(db.Integer, nullable=False)
     currency = db.Column(db.String(3), nullable=False)
     payment_status = db.Column(db.String(50), nullable=False)
-
-# User loader for Flask-Login
-@login_manager.user_loader
-def load_user(user_id):
-    return User.query.get(int(user_id))
 
 # Routes for Payment Integration
 @app.route('/stripe-key', methods=['GET'])
