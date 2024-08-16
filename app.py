@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, redirect, url_for, session
+from flask import Flask, jsonify, request, redirect, url_for, session, Blueprint
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_cors import CORS
@@ -28,7 +28,6 @@ CORS(app, resources={r"/api/*": {
     "supports_credentials": True
 }})
 
-
 @app.before_request
 def handle_options():
     if request.method == 'OPTIONS':
@@ -57,7 +56,7 @@ def index():
     return jsonify({'message': 'Welcome to the API!'})
 
 # Auth routes and logic
-auth = Blueprint('auth', __name__)   # type: ignore
+auth = Blueprint('auth', __name__)  
 
 google = oauth.register(
     name='google',
