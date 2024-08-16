@@ -57,7 +57,7 @@ def index():
     return jsonify({'message': 'Welcome to the API!'})
 
 # Auth routes and logic
-auth = Blueprint('auth', __name__)  
+auth = Blueprint('auth', __name__)   # type: ignore
 
 google = oauth.register(
     name='google',
