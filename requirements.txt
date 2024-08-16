@@ -8,3 +8,4 @@ stripe==6.0.0
 authlib==1.2.1
 python-dotenv==1.0.0
 gunicorn==20.1.0
+Flask-Bcrypt==1.0.1
