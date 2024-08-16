@@ -1,73 +1,140 @@
-
-from flask import Flask
-from models import User, db, bcrypt
-from routes import create_auth_blueprint
-from flask_login import LoginManager
-from config import Config
-from flask_migrate import Migrate
-from authlib.integrations.flask_client import OAuth
-from flask_cors import CORS
-
-# Initialize Flask app
-app = Flask(__name__)
-app.config.from_object(Config)
-
-# Initialize extensions
-db.init_app(app)
-bcrypt.init_app(app)
-migrate = Migrate(app, db)
-oauth = OAuth(app)
-
-login_manager = LoginManager()
-login_manager.init_app(app)
-login_manager.login_view = 'auth.login'
-
-# Set up global CORS to allow all routes
-CORS(app, resources={r"*": {"origins": "http://127.0.0.1:5173"}}, supports_credentials=True)
-
-# Create and register the blueprint
-auth_blueprint = create_auth_blueprint(oauth)
-app.register_blueprint(auth_blueprint, url_prefix='/api')  # Prefix all routes with /api
-
-@login_manager.user_loader
-def load_user(user_id):
-    return User.query.get(int(user_id))
-
-@app.route('/')
-def index():
-    return 'Welcome to the Flask App!'
-
-# Correct conditional check for main
-if __name__ == '_main_':
-    app.run(debug=True)
-
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, redirect, url_for, session
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_cors import CORS
+from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from authlib.integrations.flask_client import OAuth
+from config import Config
 import stripe
 import requests
 import base64
 from datetime import datetime
-import os
 
 app = Flask(__name__)
-
-CORS(app, resources={r"/*": {"origins": "http://127.0.0.1:5173", "supports_credentials": True}})
-
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///your-database.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['STRIPE_SECRET_KEY'] = 'sk_test_51PSyfKFQpmwDMxbNY99dDObf8CfPcWkt5aaHBN51skNPi1aAj9MT1Y59pPBJCMrWwcaSrOOa49VmLAPXwU2SUo8L002o7T6lqj'  
-app.config['STRIPE_PUBLIC_KEY'] = 'pk_test_51PSyfKFQpmwDMxbNUdboNSzFeEY8qAiyBPykaV1GvELeMR565tXbJGZNwJ9c55WIy78WIhSkA0kwcdfGIDrijoh0003wwNOxoq'
-app.config['MPESA_CONSUMER_KEY'] = 'jAQA3R1sHMjJAX6ycfEiHlJlb4SQAbvlFuyGgzCdUr0oOGBp'
-app.config['MPESA_CONSUMER_SECRET'] = 'odLsaVRkGWYpsv5kT60Y8sExTYCGVH24BX22t0rz4gTBAnXmyXN3df4QXDXUncq4'
-app.config['MPESA_SHORTCODE'] = '174379'
-app.config['MPESA_PASSKEY'] = 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919'
-app.config['MPESA_CALLBACK_URL'] = 'https://yourdomain.com/mpesa/callback'
+app.config.from_object(Config)
 
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
+oauth = OAuth(app)
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'auth.login'
 stripe.api_key = app.config['STRIPE_SECRET_KEY']
+
+CORS(app, resources={r"/api/*": {
+    "origins": ["http://127.0.0.1:5173", "http://localhost:5173"],
+    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "allow_headers": ["Content-Type", "Authorization"],
+    "supports_credentials": True
+}})
+
+
+@app.before_request
+def handle_options():
+    if request.method == 'OPTIONS':
+        return _build_cors_preflight_response()
+
+def _build_cors_preflight_response():
+    response = jsonify({"message": "Preflight request handled"})
+    response.headers.add("Access-Control-Allow-Origin", request.headers.get("Origin"))
+    response.headers.add("Access-Control-Allow-Headers", "Content-Type, Authorization")
+    response.headers.add("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+    response.headers.add("Access-Control-Allow-Credentials", "true")
+    return response, 200
+
+def _corsify_actual_response(response):
+    response.headers.add("Access-Control-Allow-Origin", request.headers.get("Origin"))
+    response.headers.add("Access-Control-Allow-Credentials", "true")
+    return response
+
+@app.after_request
+def after_request(response):
+    return _corsify_actual_response(response)
+
+# Route for the root URL
+@app.route('/')
+def index():
+    return jsonify({'message': 'Welcome to the API!'})
+
+# Auth routes and logic
+auth = Blueprint('auth', __name__)  
+
+google = oauth.register(
+    name='google',
+    client_id='your_google_client_id',
+    client_secret='your_google_client_secret',
+    access_token_url='https://accounts.google.com/o/oauth2/token',
+    access_token_params=None,
+    authorize_url='https://accounts.google.com/o/oauth2/auth',
+    authorize_params=None,
+    api_base_url='https://www.googleapis.com/oauth2/v1/',
+    client_kwargs={'scope': 'email'},
+)
+
+@auth.route('/signup', methods=['POST'])
+def signup():
+    data = request.get_json()
+    existing_user = User.query.filter_by(email=data['email']).first()
+
+    if existing_user:
+        return jsonify({'message': 'User already exists!'}), 409
+
+    hashed_password = bcrypt.generate_password_hash(data['password']).decode('utf-8')
+    new_user = User(username=data['username'], email=data['email'], password=hashed_password)
+    db.session.add(new_user)
+    db.session.commit()
+    
+    return jsonify({'message': 'Account created successfully!'}), 201
+
+@auth.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    user = User.query.filter_by(email=data['email']).first()
+    if user and bcrypt.check_password_hash(user.password, data['password']):
+        login_user(user)
+        return jsonify({'message': 'Login successful!'})
+    else:
+        return jsonify({'message': 'Invalid credentials!'}), 401
+
+@auth.route('/logout', methods=['POST'])
+@login_required
+def logout():
+    logout_user()
+    return jsonify({'message': 'Logged out successfully!'})
+
+@auth.route('/login/google')
+def login_google():
+    redirect_uri = url_for('auth.authorized', _external=True)
+    return google.authorize_redirect(redirect_uri)
+
+@auth.route('/login/google/authorized')
+def authorized():
+    token = google.authorize_access_token()
+    if token is None:
+        return 'Access denied: error={} description={}'.format(
+            request.args.get('error'),
+            request.args.get('error_description')
+        )
+    
+    user_info = google.get('userinfo').json()
+    email = user_info['email']
+    user = User.query.filter_by(email=email).first()
+    
+    if not user:
+        user = User(username=email.split('@')[0], email=email)
+        db.session.add(user)
+        db.session.commit()
+
+    login_user(user)
+    session['google_token'] = token
+
+    return redirect(url_for('index'))
+
+# Register the auth blueprint
+app.register_blueprint(auth, url_prefix='/api')
+
+# Models
+from models import User
 
 class Order(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -76,15 +143,12 @@ class Order(db.Model):
     currency = db.Column(db.String(3), nullable=False)
     payment_status = db.Column(db.String(50), nullable=False)
 
+# User loader for Flask-Login
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
 
-@app.route('/')
-def index():
-    return "Welcome to the Payment API"
-
-@app.route('/favicon.ico')
-def favicon():
-    return '', 204
-
+# Routes for Payment Integration
 @app.route('/stripe-key', methods=['GET'])
 def get_stripe_key():
     return jsonify({'publicKey': app.config['STRIPE_PUBLIC_KEY']})
@@ -99,7 +163,6 @@ def create_payment_intent():
             receipt_email=data['email'],
             metadata={'integration_check': 'accept_a_payment'},
         )
-
         order = Order(
             email=data['email'],
             amount=int(data['amount']),
@@ -108,7 +171,6 @@ def create_payment_intent():
         )
         db.session.add(order)
         db.session.commit()
-
         return jsonify({'clientSecret': intent['client_secret']})
     except Exception as e:
         return jsonify({'error': str(e)}), 400
@@ -131,6 +193,7 @@ def order_status(order_id):
         'payment_status': order.payment_status
     })
 
+# MPESA Integration
 def generate_mpesa_password(shortcode, passkey, timestamp):
     data = shortcode + passkey + timestamp
     encoded = base64.b64encode(data.encode())
@@ -148,27 +211,23 @@ def mpesa_payment():
     access_token = get_mpesa_access_token(app.config['MPESA_CONSUMER_KEY'], app.config['MPESA_CONSUMER_SECRET'])
     api_url = 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest'
     headers = {'Authorization': f'Bearer {access_token}'}
-    
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     password = generate_mpesa_password(app.config['MPESA_SHORTCODE'], app.config['MPESA_PASSKEY'], timestamp)
-    
     request_data = {
         'BusinessShortCode': app.config['MPESA_SHORTCODE'],
         'Password': password,
         'Timestamp': timestamp,
         'TransactionType': 'CustomerPayBillOnline',
         'Amount': data['amount'],
-        'PartyA': data['phone_number'],  
+        'PartyA': data['phone_number'],
         'PartyB': app.config['MPESA_SHORTCODE'],
-        'PhoneNumber': data['phone_number'],  
+        'PhoneNumber': data['phone_number'],
         'CallBackURL': app.config['MPESA_CALLBACK_URL'],
         'AccountReference': 'Order',
         'TransactionDesc': 'Payment for order'
     }
-
     response = requests.post(api_url, json=request_data, headers=headers)
     response_data = response.json()
-    
     if response_data.get('ResponseCode') == '0':
         return jsonify({'message': 'Payment request successful', 'CheckoutRequestID': response_data['CheckoutRequestID']})
     else:
@@ -177,30 +236,21 @@ def mpesa_payment():
 @app.route('/mpesa/callback', methods=['POST'])
 def mpesa_callback():
     data = request.json
-    print("Callback Data: ", data) 
-
+    print("Callback Data: ", data)
     if 'Body' in data and 'stkCallback' in data['Body']:
         callback_data = data['Body']['stkCallback']
-
         result_code = callback_data['ResultCode']
         result_desc = callback_data['ResultDesc']
         checkout_request_id = callback_data['CheckoutRequestID']
-
         if result_code == 0:
-            
             print("Payment successful:", result_desc)
-            
         else:
-          
             print("Payment failed:", result_desc)
-            
-
         return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"})
     else:
-        
         print("Unexpected callback data:", data)
         return jsonify({"ResultCode": 1, "ResultDesc": "Rejected"})
 
+# Correct conditional check for main
 if __name__ == '__main__':
     app.run(debug=True)
-
