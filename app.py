@@ -8,6 +8,10 @@ import os
 app = Flask(__name__)
 app.config.from_object(Config)
 
+@app.route("/")
+def home():
+    return "Welcome to my Flask app!"
+
 CORS(app)
 
 db.init_app(app)
